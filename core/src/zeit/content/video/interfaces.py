@@ -57,6 +57,11 @@ class IVideo(IVideoContent):
         required=False,
         readonly=True)
 
+    video_still_image = zope.schema.URI(
+        title=_('Refering still image group content'),
+        required=True,
+        readonly=True)
+
     renditions = zope.schema.Tuple(
         title=_("Renditions of the Video"),
         required=False,

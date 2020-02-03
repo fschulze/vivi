@@ -175,6 +175,14 @@ class Video(Converter):
         cmsobj.ressort = custom.get('ressort')
         cmsobj.serie = IVideo['serie'].source(None).find(custom.get('serie'))
         cmsobj.supertitle = custom.get('supertitle')
+            # TODO create an ordinary ImageGroup out of bc_video-id
+        group = ImageGroup(get_remote_image(date.get['id']))
+            # TODO add still image reference to IVideo
+            # TODO refer to created image group:
+        # SEE article main_image
+        cmsobj.video_still_image = video.still_image.create(group)
+            # render block with 'link' to image group in browser
+            # TODO ...use this information in friedbert...
         cmsobj.video_still_copyright = custom.get('credit')
 
         product_source = IVideo['product'].source(cmsobj)
@@ -233,6 +241,18 @@ class Video(Converter):
         if convert is not None:
             value = convert(value)
         return value
+
+    def get_remote_image(self, bc_id):
+        return RemoteImage(_player_data(bc_id)['image_still_url'])
+            # TODO add this class in image module
+            # SEE https://github.com/ZeitOnline/zeit.web/blob/master/src/zeit/web/core/image.py#L611
+
+    @cachedproperty
+    def _player_data(self, bc_id):
+        player = zope.component.getUtility(
+            zeit.content.video.interfaces.IPlayer)
+        return player.get_video(bc_id)
+
 
     @property
     def write_data(self):
