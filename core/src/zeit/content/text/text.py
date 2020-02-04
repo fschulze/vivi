@@ -1,4 +1,4 @@
-from six import StringIO
+from io import BytesIO
 from zeit.cms.i18n import MessageFactory as _
 import persistent
 import six
@@ -62,7 +62,10 @@ class TextType(zeit.cms.type.TypeDeclaration):
         return text
 
     def resource_body(self, content):
-        return StringIO(content.text.encode(content.encoding))
+        if isinstance(content.text, six.text_type):
+            return BytesIO(content.text.encode(content.encoding))
+        else:
+            return BytesIO(content.text)
 
     def resource_content_type(self, content):
         return 'text/plain'

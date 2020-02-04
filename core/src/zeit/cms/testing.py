@@ -410,7 +410,7 @@ class RecordingRequestHandler(gocept.httpserverlayer.custom.RequestHandler):
         self.requests.append(dict(
             verb=self.command,
             path=self.path,
-            body=self.rfile.read(length) if length else None,
+            body=self.rfile.read(length).decode('utf-8') if length else None,
         ))
         if isinstance(self.response_code, int):
             status = self.response_code
@@ -420,6 +420,8 @@ class RecordingRequestHandler(gocept.httpserverlayer.custom.RequestHandler):
             body = self.response_body
         else:
             body = self.response_body.pop(0)
+        if isinstance(body, six.text_type):
+            body = body.encode('utf-8')
         self.send_response(status)
         self.end_headers()
         self.wfile.write(body)
@@ -532,9 +534,25 @@ checker = OutputChecker([
      "<GUID>"),
 ])
 
+
+def remove_exception_module(msg):
+    """Copy&paste so we keep the exception message and support multi-line."""
+    start, end = 0, len(msg)
+    name_end = msg.find(':', 0, end)
+    i = msg.rfind('.', 0, name_end)
+    if i >= 0:
+        start = i + 1
+    return msg[start:end]
+
+
+if sys.version_info > (3,):
+    doctest._strip_exception_details = remove_exception_module
+
+
 optionflags = (doctest.REPORT_NDIFF +
                doctest.NORMALIZE_WHITESPACE +
-               doctest.ELLIPSIS)
+               doctest.ELLIPSIS +
+               doctest.IGNORE_EXCEPTION_DETAIL)
 
 
 def DocFileSuite(*paths, **kw):
@@ -838,8 +856,11 @@ class Browser(zope.testbrowser.browser.Browser):
         super(Browser, self).__init__(wsgi_app=wsgi_app)
 
     def login(self, username, password):
-        self.addHeader('Authorization', 'Basic %s' % base64.b64encode(
-            ('%s:%s' % (username, password)).encode('utf-8')))
+        auth = base64.b64encode(
+            ('%s:%s' % (username, password)).encode('utf-8'))
+        if sys.version_info > (3,):
+            auth = auth.decode('ascii')
+        self.addHeader('Authorization', 'Basic %s' % auth)
 
     def reload(self):
         # Don't know what the superclass is doing here, exactly, but it's not
@@ -1025,3 +1046,7 @@ def clock(dt=None):
     with mock.patch('datetime.datetime', Freeze):
         Freeze.freeze(dt)
         yield Freeze
+
+
+def xmltotext(xml):
+    return lxml.etree.tostring(xml, pretty_print=True, encoding=six.text_type)
