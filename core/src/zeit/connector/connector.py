@@ -1,5 +1,6 @@
 """Connect to the CMS backend."""
 
+from . import postgresql
 from io import BytesIO
 import datetime
 import gocept.cache.property
@@ -763,7 +764,7 @@ class Connector(object):
             'search': config['document-store-search']})
 
 
-connector_factory = Connector.factory
+connector_factory = postgresql.Connector.factory
 
 
 class TransactionBoundCachingConnector(Connector):
@@ -781,4 +782,4 @@ class TransactionBoundCachingConnector(Connector):
 
 
 transaction_bound_caching_connector_factory = \
-    TransactionBoundCachingConnector.factory
+    postgresql.TransactionBoundCachingConnector.factory

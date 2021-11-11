@@ -18,6 +18,7 @@ import zeit.cms.browser.view
 import zeit.cms.content.sources
 import zeit.cms.interfaces
 import zeit.connector.connector
+import zeit.connector.postgresql
 import zope.app.appsetup.product
 import zope.component
 import zope.site.site
@@ -466,5 +467,5 @@ def toc_connector_factory():
     config = zope.app.appsetup.product.getProductConfiguration(
         'zeit.content.volume')
     dav_archive_url = config.get('dav-archive-url')
-    return zeit.connector.connector.TransactionBoundCachingConnector(
+    return zeit.connector.postgresql.TransactionBoundCachingConnector(
         {'default': dav_archive_url})

@@ -2,10 +2,10 @@
 
   <utility 
     provides="zeit.connector.interfaces.IConnector"
-    factory=".zopeconnector.connectorFactory"
+    factory=".postgresql.connectorFactory"
     />
 
-  <subscriber handler=".zopeconnector.invalidate_cache" />
+  <subscriber handler=".postgresql.invalidate_cache" />
 
 </configure>
 

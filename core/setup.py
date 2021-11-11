@@ -42,6 +42,7 @@ setup(
         'opentelemetry-api',
         'pendulum>=2.0.0.dev0',
         'persistent',
+        'psycopg2',
         'pyramid_dogpile_cache2',
         'pytz',
         'requests',
