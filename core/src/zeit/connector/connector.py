@@ -757,6 +757,7 @@ class Connector(object):
     @classmethod
     def factory(cls):
         import zope.app.appsetup.product
+        print("connector.Connector.factory")
         config = zope.app.appsetup.product.getProductConfiguration(
             'zeit.connector')
         return cls({

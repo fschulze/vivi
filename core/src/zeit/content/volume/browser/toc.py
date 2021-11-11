@@ -464,6 +464,7 @@ class Excluder(object):
 
 
 def toc_connector_factory():
+    print("toc.toc_connector_factory")
     config = zope.app.appsetup.product.getProductConfiguration(
         'zeit.content.volume')
     dav_archive_url = config.get('dav-archive-url')

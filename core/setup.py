@@ -35,6 +35,7 @@ setup(
         'gocept.runner>0.5.3',
         'grokcore.component',
         'iso8601>=0.1.2',
+        'lazy',
         'lxml>=2.0.2',
         'martian',
         'markdown',
