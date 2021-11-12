@@ -73,10 +73,6 @@ class Connector(object):
         return zeit.connector.connector.Connector(self._roots, self._prefix)
 
     def _id2path(self, id):
-        """Transform an id to a location, e.g.
-             http://xml.zeit.de/2006/12/ -->
-             http://zip4.zeit.de:9999/cms/work/2006/12/
-           Just a textual transformation: replace _prefix with _root"""
         if not id.startswith(self._prefix):
             raise ValueError("Bad id %r (prefix is %r)" % (id, self._prefix))
         return id[len(self._prefix):]
@@ -115,6 +111,7 @@ class Connector(object):
             properties = {}
             for ns, d in item.properties.items():
                 for k, v in d.items():
+                    # TODO handle conversion of datetime objects
                     properties[(k, ns)] = v
             resource_type = _get_resource_type(properties)
             content_type = properties.get(('getcontenttype', 'DAV:'))
