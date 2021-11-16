@@ -21,6 +21,7 @@ RESOURCE_TYPE_PROPERTY = zeit.connector.interfaces.RESOURCE_TYPE_PROPERTY
 RFC3339_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 
 # engine = create_engine("postgresql:///vivi", echo=True, echo_pool=True, future=True)
+# engine = create_engine("postgresql:///vivi", echo=True, future=True)
 engine = create_engine("postgresql:///vivi", echo_pool=True, future=True)
 # engine = create_engine("postgresql:///vivi", future=True)
 
@@ -70,7 +71,9 @@ class Connector(object):
     def _webdav_connector(self):
         print("postgresql.Connector._webdav_connector")
         import zeit.connector.connector
-        return zeit.connector.connector.Connector(self._roots, self._prefix)
+        connector = zeit.connector.connector.Connector(self._roots, self._prefix)
+        connector.from_postgresql = True
+        return connector
 
     def _id2path(self, id):
         if not id.startswith(self._prefix):
@@ -96,6 +99,10 @@ class Connector(object):
             metadata = {}
             for (k, ns), v in properties.items():
                 if isinstance(v, datetime.datetime):
+                    if k == 'cached-time':
+                        # ignore property from zeo cache
+                        continue
+                    raise RuntimeError("datetime %r %r" % (k, v))
                     v = v.strftime(RFC3339_FORMAT)
                 metadata.setdefault(ns, {})[k] = v
             body = wdc._get_resource_body(cid)

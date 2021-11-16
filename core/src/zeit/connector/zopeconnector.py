@@ -22,6 +22,8 @@ class ZopeConnector(zeit.connector.postgresql.Connector):
     and transaction machinery."""
 
     def create_connection(self, root):
+        if not self.from_postgresql:
+            raise RuntimeError
         connection = super(self.__class__, self).create_connection(root)
         dm = connection._connector_datamanager = DataManager(self)
         transaction.get().join(dm)
@@ -31,6 +33,8 @@ class ZopeConnector(zeit.connector.postgresql.Connector):
         return connection
 
     def _get_calling_url(self):
+        if not self.from_postgresql:
+            raise RuntimeError
         try:
             interaction = zope.security.management.getInteraction()
         except zope.security.interfaces.NoInteraction:
@@ -41,16 +45,22 @@ class ZopeConnector(zeit.connector.postgresql.Connector):
         return ICurrentURL(request, None)
 
     def get_datamanager(self):
+        if not self.from_postgresql:
+            raise RuntimeError
         conn = self.get_connection()
         return conn._connector_datamanager
 
     def lock(self, id, principal, until):
+        if not self.from_postgresql:
+            raise RuntimeError
         locktoken = super(self.__class__, self).lock(id, principal, until)
         datamanager = self.get_datamanager()
         datamanager.add_cleanup(self.unlock, id, locktoken, False)
         return locktoken
 
     def unlock(self, id, locktoken=None, invalidate=True):
+        if not self.from_postgresql:
+            raise RuntimeError
         locktoken = super(self.__class__, self).unlock(
             id, locktoken, invalidate)
         self.get_datamanager().remove_cleanup(
@@ -58,6 +68,8 @@ class ZopeConnector(zeit.connector.postgresql.Connector):
         return locktoken
 
     def move(self, old_id, new_id):
+        if not self.from_postgresql:
+            raise RuntimeError
         super(ZopeConnector, self).move(old_id, new_id)
         # Only register clean up if move didn't fail:
         self.get_datamanager().add_cleanup(
@@ -65,20 +77,28 @@ class ZopeConnector(zeit.connector.postgresql.Connector):
 
     @property
     def body_cache(self):
+        if not self.from_postgresql:
+            raise RuntimeError
         return zope.component.getUtility(
             zeit.connector.interfaces.IResourceCache)
 
     @property
     def property_cache(self):
+        if not self.from_postgresql:
+            raise RuntimeError
         return zope.component.getUtility(
             zeit.connector.interfaces.IPropertyCache)
 
     @property
     def child_name_cache(self):
+        if not self.from_postgresql:
+            raise RuntimeError
         return zope.component.getUtility(
             zeit.connector.interfaces.IChildNameCache)
 
     def _invalidate_cache(self, id):
+        if not self.from_postgresql:
+            raise RuntimeError
         zope.event.notify(
             zeit.connector.interfaces.ResourceInvaliatedEvent(id))
 
@@ -103,42 +123,64 @@ class DataManager(object):
         self.cleanup = []
 
     def abort(self, trans):
+        if not self.from_postgresql:
+            raise RuntimeError
         self._cleanup()
         self.connector.disconnect()
 
     def tpc_begin(self, trans):
+        if not self.from_postgresql:
+            raise RuntimeError
         pass
 
     def commit(self, trans):
+        if not self.from_postgresql:
+            raise RuntimeError
         pass
 
     def tpc_vote(self, trans):
+        if not self.from_postgresql:
+            raise RuntimeError
         pass
 
     def tpc_finish(self, trans):
+        if not self.from_postgresql:
+            raise RuntimeError
         self.connector.disconnect()
 
     def tpc_abort(self, trans):
+        if not self.from_postgresql:
+            raise RuntimeError
         self._cleanup()
         self.connector.disconnect()
 
     def sortKey(self):
+        if not self.from_postgresql:
+            raise RuntimeError
         return str(id(self))
 
     def savepoint(self):
         # This would be a point to flush pending commands.
+        if not self.from_postgresql:
+            raise RuntimeError
         return ConnectorSavepoint()
 
     def add_cleanup(self, method, *args, **kwargs):
+        if not self.from_postgresql:
+            raise RuntimeError
         self.cleanup.append((method, args, kwargs))
 
     def remove_cleanup(self, method, *args, **kwargs):
+        if not self.from_postgresql:
+            raise RuntimeError
         try:
             self.cleanup.remove((method, args, kwargs))
         except ValueError:
             pass
 
     def _cleanup(self):
+        if not self.from_postgresql:
+            raise RuntimeError
         for method, args, kwargs in self.cleanup:
             log.info("Abort cleanup: %s(%s, %s)" % (method, args, kwargs))
             try:

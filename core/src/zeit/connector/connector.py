@@ -96,6 +96,8 @@ class Connector(object):
 
     def get_connection(self, root='default'):
         """Try to get a cached connection suitable for url"""
+        if not self.from_postgresql:
+            raise RuntimeError
         try:
             connection = getattr(self.connections, root)
         except AttributeError:
@@ -105,6 +107,8 @@ class Connector(object):
 
     def create_connection(self, root):
         """Create a new connection."""
+        if not self.from_postgresql:
+            raise RuntimeError
         logger.debug('New connection')
         url = self._roots[root]
         (scheme, netloc) = six.moves.urllib.parse.urlsplit(url)[0:2]
@@ -118,6 +122,8 @@ class Connector(object):
         return zeit.connector.dav.davconnection.DAVConnection(host, port)
 
     def disconnect(self):
+        if not self.from_postgresql:
+            raise RuntimeError
         connections = self.connections
         try:
             del connections.default
@@ -126,12 +132,16 @@ class Connector(object):
 
     def listCollection(self, id):
         """List the filenames of a collection identified by <id> (see[8]). """
+        if not self.from_postgresql:
+            raise RuntimeError
         __traceback_info__ = (id, )
         id = self._get_cannonical_id(id)
         for child_id in self._get_resource_child_ids(id):
             yield (self._id_splitlast(child_id)[1].rstrip('/'), child_id)
 
     def _get_resource_type(self, id):
+        if not self.from_postgresql:
+            raise RuntimeError
         __traceback_info__ = (id, )
         properties = self._get_resource_properties(id)
         r_type = properties.get(RESOURCE_TYPE_PROPERTY)
@@ -148,6 +158,8 @@ class Connector(object):
         return r_type
 
     def _get_resource_properties(self, id):
+        if not self.from_postgresql:
+            raise RuntimeError
         __traceback_info__ = (id, )
         properties = None
         try:
@@ -165,6 +177,8 @@ class Connector(object):
         return properties
 
     def _get_resource_child_ids(self, id):
+        if not self.from_postgresql:
+            raise RuntimeError
         try:
             child_ids = self.child_name_cache[id]
         except KeyError:
@@ -176,6 +190,8 @@ class Connector(object):
         return child_ids
 
     def _update_property_cache(self, dav_result):
+        if not self.from_postgresql:
+            raise RuntimeError
         now = datetime.datetime.now(pytz.UTC)
         cache = self.property_cache
         for path, response in dav_result._result.responses.items():
@@ -191,6 +207,8 @@ class Connector(object):
                 cache[response_id] = properties
 
     def _update_child_id_cache(self, dav_response):
+        if not self.from_postgresql:
+            raise RuntimeError
         if not dav_response.is_collection():
             return
         id = self._loc2id(six.moves.urllib.parse.urljoin(
@@ -203,6 +221,8 @@ class Connector(object):
 
     def _get_resource_body(self, id):
         """Return body of resource."""
+        if not self.from_postgresql:
+            raise RuntimeError
         __traceback_info__ = (id, )
         properties = self._get_resource_properties(id)
         data = None
@@ -223,6 +243,8 @@ class Connector(object):
 
     def __getitem__(self, id):
         """Return the resource identified by `id`."""
+        if not self.from_postgresql:
+            raise RuntimeError
         __traceback_info__ = (id, )
         id = self._get_cannonical_id(id)
         try:
@@ -242,6 +264,8 @@ class Connector(object):
     def __setitem__(self, id, object):
         """Add the given `object` to the document store under the given name.
         """
+        if not self.from_postgresql:
+            raise RuntimeError
         id = self._get_cannonical_id(id)
         resource = zeit.connector.interfaces.IResource(object)
         resource.id = id  # override
@@ -249,6 +273,8 @@ class Connector(object):
 
     def __delitem__(self, id):
         """Remove the resource from the repository."""
+        if not self.from_postgresql:
+            raise RuntimeError
         id = self._get_cannonical_id(id)
 
         # Invalidate the cache to make sure we have the real lock information
@@ -259,6 +285,8 @@ class Connector(object):
 
     def __contains__(self, id):
         # Because we cache a lot it will be ok to just grab the object:
+        if not self.from_postgresql:
+            raise RuntimeError
         try:
             self[id]
         except KeyError:
@@ -266,24 +294,32 @@ class Connector(object):
         return True
 
     def add(self, object, verify_etag=True):
+        if not self.from_postgresql:
+            raise RuntimeError
         resource = zeit.connector.interfaces.IResource(object)
         id = self._get_cannonical_id(resource.id)
         self._internal_add(id, resource, verify_etag)
 
     def copy(self, old_id, new_id):
         """Copy the resource old_id to new_id."""
+        if not self.from_postgresql:
+            raise RuntimeError
         self._copy_or_move('copy', zeit.connector.interfaces.CopyError,
                            old_id, new_id)
 
     def move(self, old_id, new_id):
         """Move the resource with id `old_id` to `new_id`.
         """
+        if not self.from_postgresql:
+            raise RuntimeError
         self._copy_or_move('move', zeit.connector.interfaces.MoveError,
                            old_id, new_id,
                            resolve_conflicts=True)
 
     def _copy_or_move(self, method_name, exception, old_id, new_id,
                       resolve_conflicts=False):
+        if not self.from_postgresql:
+            raise RuntimeError
         source = self[old_id]  # Makes sure source exists.
         if self._is_descendant(new_id, old_id):
             raise exception(
@@ -351,11 +387,15 @@ class Connector(object):
         ...                          'http://foo.bar/a/b/d')
         False
         """
+        if not self.from_postgresql:
+            raise RuntimeError
         path1 = six.moves.urllib.parse.urlsplit(id1)[2].split('/')
         path2 = six.moves.urllib.parse.urlsplit(id2)[2].split('/')
         return (len(path2) <= len(path1) and path2 == path1[:len(path2)])
 
     def changeProperties(self, id, properties, locktoken=None):
+        if not self.from_postgresql:
+            raise RuntimeError
         id = self._get_cannonical_id(id)
         if locktoken is None:
             locktoken = self._get_my_locktoken(id)
@@ -381,6 +421,8 @@ class Connector(object):
 
     def lock(self, id, principal, until):
         """Lock resource for principal until a given datetime."""
+        if not self.from_postgresql:
+            raise RuntimeError
         url = self._id2loc(self._get_cannonical_id(id))
         token = None
         try:
@@ -399,6 +441,8 @@ class Connector(object):
         return token
 
     def unlock(self, id, locktoken=None, invalidate=True):
+        if not self.from_postgresql:
+            raise RuntimeError
         if invalidate:
             self._invalidate_cache(id)
         url = self._id2loc(self._get_cannonical_id(id))
@@ -410,6 +454,8 @@ class Connector(object):
         return locktoken
 
     def locked(self, id):
+        if not self.from_postgresql:
+            raise RuntimeError
         id = self._get_cannonical_id(id)
         try:
             davlock = self._get_dav_lock(id)
@@ -452,6 +498,8 @@ class Connector(object):
            For each match return the values of the attributes
            specified in attrlist
         """
+        if not self.from_postgresql:
+            raise RuntimeError
         # Collect "result" vars as bindings "into" expression:
         for at in attrlist:
             expr = at.bind(zeit.connector.search.SearchSymbol('_')) & expr
@@ -481,6 +529,8 @@ class Connector(object):
                 props[(a.name, a.namespace)] for a in attrlist])
 
     def _get_my_locktoken(self, id):
+        if not self.from_postgresql:
+            raise RuntimeError
         locker, until, myself = self.locked(id)
 
         if (locker or until) and not myself:
@@ -498,6 +548,8 @@ class Connector(object):
              http://xml.zeit.de/2006/12/ -->
              http://zip4.zeit.de:9999/cms/work/2006/12/
            Just a textual transformation: replace _prefix with _root"""
+        if not self.from_postgresql:
+            raise RuntimeError
         if not id.startswith(self._prefix):
             raise ValueError("Bad id %r (prefix is %r)" % (id, self._prefix))
         path = id[len(self._prefix):]
@@ -508,6 +560,8 @@ class Connector(object):
              http://zip4.zeit.de:9999/cms/work/2006/12/ -->
              http://xml.zeit.de/2006/12/
            Just a textual transformation: replace _root with _prefix"""
+        if not self.from_postgresql:
+            raise RuntimeError
         root = self._roots['default']
         if not loc.startswith(root):
             raise ValueError("Bad location %r (root is %r)" % (loc, root))
@@ -517,6 +571,8 @@ class Connector(object):
     def _internal_add(self, id, resource, verify_etag=True):
         """The grunt work of __setitem__() and add()
         """
+        if not self.from_postgresql:
+            raise RuntimeError
         self._invalidate_cache(id)
         locktoken = self._get_my_locktoken(id)
         autolock = (locktoken is None)
@@ -579,6 +635,8 @@ class Connector(object):
         # NOTE id is the collection's id. Trailing slash is appended if needed.
         # We assume id to map to a non-existent resource, its
         # parent is assumed to exist.
+        if not self.from_postgresql:
+            raise RuntimeError
         if not id.endswith('/'):
             id += '/'
         conn = self.get_connection()
@@ -589,6 +647,8 @@ class Connector(object):
         """Check whether resource <id> exists.
            Issue a head request and return not None when found.
         """
+        if not self.from_postgresql:
+            raise RuntimeError
         url = self._id2loc(id)
         hresp = zeit.connector.dav.davresource.DAVResource(
             url, conn=self.get_connection()).head()
@@ -606,6 +666,8 @@ class Connector(object):
 
     def _get_dav_resource(self, id):
         """returns resource corresponding to <id>"""
+        if not self.from_postgresql:
+            raise RuntimeError
         url = self._id2loc(id)
         # NOTE: We tacitly assume that URIs ending with '/' MUST
         # be collections. This ain't strictly right, but is sufficient.
@@ -616,6 +678,8 @@ class Connector(object):
         return klass(url, conn=self.get_connection())
 
     def _get_dav_lock(self, id):
+        if not self.from_postgresql:
+            raise RuntimeError
         lockdiscovery = self[id].properties[('lockdiscovery', 'DAV:')]
 
         if not lockdiscovery:
@@ -667,10 +731,14 @@ class Connector(object):
 
     def _invalidate_cache(self, id):
         # Make an indirection here to allow zopeconnector to use events.
+        if not self.from_postgresql:
+            raise RuntimeError
         self.invalidate_cache(id)
 
     def invalidate_cache(self, id):
         """invalidate cache (and refill)."""
+        if not self.from_postgresql:
+            raise RuntimeError
         try:
             # Loads properties from dav and stores when necessary.
             davres = self._get_dav_resource(id)
@@ -715,6 +783,8 @@ class Connector(object):
 
     def _get_cannonical_id(self, id):
         """Add / for collections if not appended yet."""
+        if not self.from_postgresql:
+            raise RuntimeError
         if isinstance(id, CannonicalId):
             return id
         if id == self._prefix:
@@ -744,14 +814,20 @@ class Connector(object):
 
     @zope.cachedescriptors.property.Lazy
     def body_cache(self):
+        if not self.from_postgresql:
+            raise RuntimeError
         return zeit.connector.cache.ResourceCache()
 
     @zope.cachedescriptors.property.Lazy
     def property_cache(self):
+        if not self.from_postgresql:
+            raise RuntimeError
         return zeit.connector.cache.PropertyCache()
 
     @zope.cachedescriptors.property.Lazy
     def child_name_cache(self):
+        if not self.from_postgresql:
+            raise RuntimeError
         return zeit.connector.cache.ChildNameCache()
 
     @classmethod
