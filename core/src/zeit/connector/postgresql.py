@@ -1,12 +1,15 @@
 from io import BytesIO
 from lazy import lazy
+from lxml.html import fromstring as parse_html
 from sqlalchemy import MetaData
 from sqlalchemy import Column
+from sqlalchemy import ForeignKey
 from sqlalchemy import LargeBinary
 from sqlalchemy import Unicode
 from sqlalchemy import create_engine
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base
+from sqlalchemy.orm import relationship
 from sqlalchemy.orm import scoped_session
 from sqlalchemy.orm import sessionmaker
 from zope.sqlalchemy import register
@@ -42,6 +45,16 @@ class StorageItem(BaseObject):
     properties = Column(JSONB, nullable=False)
 
 
+class CanonicalPath(BaseObject):
+    __tablename__ = "canonical_path"
+
+    id = Column(Unicode, primary_key=True)
+    path = Column(
+        Unicode,
+        ForeignKey(StorageItem.path, onupdate="CASCADE", ondelete="CASCADE"))
+    item = relationship(StorageItem, lazy='joined')
+
+
 def _get_resource_type(properties):
     __traceback_info__ = (id, )
     r_type = properties.get(RESOURCE_TYPE_PROPERTY)
@@ -67,74 +80,128 @@ class Connector(object):
         self._prefix = prefix
         metadata_object.create_all(engine)
 
-    @lazy
-    def _webdav_connector(self):
-        print("postgresql.Connector._webdav_connector")
-        import zeit.connector.connector
-        connector = zeit.connector.connector.Connector(self._roots, self._prefix)
-        connector.from_postgresql = True
-        return connector
-
     def _id2path(self, id):
         if not id.startswith(self._prefix):
             raise ValueError("Bad id %r (prefix is %r)" % (id, self._prefix))
         return id[len(self._prefix):]
 
-    def __getitem__(self, id):
-        cid = self._webdav_connector._get_cannonical_id(id)
-        path = self._id2path(id)
+    @lazy
+    def DAVConnector(self):
+        import zeit.connector.connector
+        return zeit.connector.connector.Connector
+
+    @lazy
+    def _webdav_connector(self):
+        print("postgresql.Connector._webdav_connector")
+        connector = self.DAVConnector(self._roots, self._prefix)
+        connector.from_postgresql = True
+        return connector
+
+    def _webdav_get(self, session, id):
         wdc = self._webdav_connector
+        cid = self._webdav_connector._get_cannonical_id(id)
+        path = self._id2path(cid)
+        try:
+            properties = wdc._get_resource_properties(cid)
+        except (zeit.connector.dav.interfaces.DAVNotFoundError,
+                zeit.connector.dav.interfaces.DAVBadRequestError):
+            print(cid, "Not found")
+            raise KeyError(
+                "The resource %r does not exist." % six.text_type(cid))
+        # properties have tuples of the form (key, namespace) as keys,
+        # which doesn't work as json, so create a nested dict instead
+        metadata = {}
+        for (k, ns), v in properties.items():
+            if isinstance(v, datetime.datetime):
+                if k == 'cached-time':
+                    # ignore property from zeo cache
+                    continue
+                raise RuntimeError("datetime %r %r" % (k, v))
+                v = v.strftime(RFC3339_FORMAT)
+            metadata.setdefault(ns, {})[k] = v
+        body = wdc._get_resource_body(cid)
+        session.add(StorageItem(
+            path=path,
+            blob=body.read(),
+            properties=metadata))
+        session.add(CanonicalPath(id=cid, path=path))
+        if id != cid:
+            session.add(CanonicalPath(id=id, path=path))
+        result = wdc[id]
+        print("DAV", id, result)
+        return result
+
+    def _db_get(self, session, id):
+        # properties have tuples of the form (key, namespace) as keys,
+        # which doesn't work as json, so we transform from a nested dict
+        cpath = session.get(CanonicalPath, id)
+        if cpath is None:
+            cid = self._webdav_connector._get_cannonical_id(id)
+            cpath = session.get(CanonicalPath, cid)
+            if cpath is None:
+                return None
+            session.add(CanonicalPath(id=id, path=cpath.item.path))
+        item = cpath.item
+        properties = {}
+        for ns, d in item.properties.items():
+            for k, v in d.items():
+                # TODO handle conversion of datetime objects
+                properties[(k, ns)] = v
+        resource_type = _get_resource_type(properties)
+        content_type = properties.get(('getcontenttype', 'DAV:'))
+        body = BytesIO(item.blob)
+        path = item.path
+        cid = self._prefix + path
+        del item
+        result = zeit.connector.resource.CachedResource(
+            six.text_type(cid),
+            self.DAVConnector._id_splitlast(cid)[1].rstrip('/'),
+            resource_type,
+            lambda: properties,
+            lambda: body,
+            content_type=content_type)
+        print("DB", path, result)
+        return result
+
+    def __getitem__(self, id):
         session = DBSession()
-        item = session.get(StorageItem, path)
-        if item is None:
-            try:
-                properties = wdc._get_resource_properties(cid)
-            except (zeit.connector.dav.interfaces.DAVNotFoundError,
-                    zeit.connector.dav.interfaces.DAVBadRequestError):
-                print(cid, "Not found")
-                raise KeyError(
-                    "The resource %r does not exist." % six.text_type(cid))
-            # properties have tuples of the form (key, namespace) as keys,
-            # which doesn't work as json, so create a nested dict instead
-            metadata = {}
-            for (k, ns), v in properties.items():
-                if isinstance(v, datetime.datetime):
-                    if k == 'cached-time':
-                        # ignore property from zeo cache
-                        continue
-                    raise RuntimeError("datetime %r %r" % (k, v))
-                    v = v.strftime(RFC3339_FORMAT)
-                metadata.setdefault(ns, {})[k] = v
-            body = wdc._get_resource_body(cid)
-            session.add(StorageItem(
-                path=path,
-                blob=body.read(),
-                properties=metadata))
-            result = wdc[id]
-            print("DAV", id, result)
-        else:
-            # properties have tuples of the form (key, namespace) as keys,
-            # which doesn't work as json, so we transform from a nested dict
-            properties = {}
-            for ns, d in item.properties.items():
-                for k, v in d.items():
-                    # TODO handle conversion of datetime objects
-                    properties[(k, ns)] = v
-            resource_type = _get_resource_type(properties)
-            content_type = properties.get(('getcontenttype', 'DAV:'))
-            body = BytesIO(item.blob)
-            del item
-            result = zeit.connector.resource.CachedResource(
-                six.text_type(cid), wdc._id_splitlast(cid)[1].rstrip('/'),
-                resource_type,
-                lambda: properties,
-                lambda: body,
-                content_type=content_type)
-            print("DB", path, result)
+        result = self._db_get(session, id)
+        if result is None:
+            result = self._webdav_get(session, id)
+        return result
+
+    def listCollection(self, id):
+        tree = parse_html(self[id].data.read())
+        result = sorted(
+            (x.text, id + x.text)
+            for x in tree.cssselect('td > a')
+            if '/' not in x.attrib['href'])
+        _result = sorted(self._webdav_connector.listCollection(id))
+        if result != _result:
+            import pdb; pdb.set_trace()
+            return _result
+        print("listCollection", id, result)
+        return result
+
+    def add(self, obj, verify_etag=True):
+        result = self._webdav_connector.add(obj, verify_etag=verify_etag)
+        print("add", obj, verify_etag, result)
+        return result
+
+    def lock(self, id, principal, until):
+        result = self._webdav_connector.lock(id, principal, until)
+        print("lock", id, principal, until, result)
         return result
 
     def locked(self, id):
+        # return (None, None, False)
         return self._webdav_connector.locked(id)
+
+    def unlock(self, id, locktoken=None, invalidate=True):
+        result = self._webdav_connector.unlock(
+            id, locktoken=locktoken, invalidate=invalidate)
+        print("unlock", id, locktoken, invalidate, result)
+        return result
 
     @classmethod
     def factory(cls):

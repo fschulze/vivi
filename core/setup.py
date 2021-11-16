@@ -19,6 +19,7 @@ setup(
         'Jinja2 >= 2.11.0.dev0',
         'Pillow',
         'PyJWT',
+        'SQLAlchemy',
         'cryptography',  # so pyjwt can offer RSA
         'ZODB',
         'beautifulsoup4',
@@ -91,6 +92,7 @@ setup(
         'zope.schema',
         'zope.security',
         'zope.securitypolicy',
+        'zope.sqlalchemy',
         'zope.traversing',  # XXX Should move to [ui], but is entrenched
         'zope.xmlpickle',
     ],
