@@ -7,7 +7,9 @@ from sqlalchemy import ForeignKey
 from sqlalchemy import LargeBinary
 from sqlalchemy import Unicode
 from sqlalchemy import create_engine
+from sqlalchemy import event
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapper
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.orm import scoped_session
@@ -32,6 +34,28 @@ DBSession = scoped_session(sessionmaker(bind=engine))
 register(DBSession)
 
 
+def _index_object(session, instance):
+    # store a "hard" reference to the object on the session,
+    # otherwise gc will remove the instances from the weak identity_map
+    # during the request, which would cause a re-fetch from the db
+    # see https://github.com/sqlalchemy/sqlalchemy/discussions/7246
+    set_ = session.info.get("strong_set", None)
+    if not set_:
+        session.info["strong_set"] = set_ = set()
+
+    set_.add(instance)
+
+
+@event.listens_for(Mapper, "load")
+def object_loaded(instance, ctx):
+    _index_object(ctx.session, instance)
+
+
+@event.listens_for(DBSession, "after_attach")
+def index_object(session, instance):
+    _index_object(session, instance)
+
+
 metadata_object = MetaData()
 
 BaseObject = declarative_base(metadata=metadata_object)
@@ -51,7 +75,8 @@ class CanonicalPath(BaseObject):
     id = Column(Unicode, primary_key=True)
     path = Column(
         Unicode,
-        ForeignKey(StorageItem.path, onupdate="CASCADE", ondelete="CASCADE"))
+        ForeignKey(StorageItem.path, onupdate="CASCADE", ondelete="CASCADE"),
+        nullable=True)
     item = relationship(StorageItem, lazy='joined')
 
 
@@ -106,6 +131,8 @@ class Connector(object):
         except (zeit.connector.dav.interfaces.DAVNotFoundError,
                 zeit.connector.dav.interfaces.DAVBadRequestError):
             print(cid, "Not found")
+            # cache not found
+            session.add(CanonicalPath(id=id, path=None))
             raise KeyError(
                 "The resource %r does not exist." % six.text_type(cid))
         # properties have tuples of the form (key, namespace) as keys,
@@ -141,6 +168,9 @@ class Connector(object):
             if cpath is None:
                 return None
             session.add(CanonicalPath(id=id, path=cpath.item.path))
+        if cpath.path is None:
+            raise KeyError(
+                "The resource %r does not exist." % six.text_type(id))
         item = cpath.item
         properties = {}
         for ns, d in item.properties.items():
@@ -152,7 +182,6 @@ class Connector(object):
         body = BytesIO(item.blob)
         path = item.path
         cid = self._prefix + path
-        del item
         result = zeit.connector.resource.CachedResource(
             six.text_type(cid),
             self.DAVConnector._id_splitlast(cid)[1].rstrip('/'),
@@ -160,7 +189,7 @@ class Connector(object):
             lambda: properties,
             lambda: body,
             content_type=content_type)
-        print("DB", path, result)
+        # print("DB", path, result)
         return result
 
     def __getitem__(self, id):
@@ -171,16 +200,18 @@ class Connector(object):
         return result
 
     def listCollection(self, id):
-        tree = parse_html(self[id].data.read())
+        body = self[id].data.read()
+        tree = parse_html(body)
         result = sorted(
-            (x.text, id + x.text)
+            (x.text.rstrip('/'), id + x.text)
             for x in tree.cssselect('td > a')
-            if '/' not in x.attrib['href'])
+            if x.text != 'Parent Directory' and not x.attrib['href'].startswith('/'))
         _result = sorted(self._webdav_connector.listCollection(id))
         if result != _result:
-            import pdb; pdb.set_trace()
+            print("listCollection (differences)", id, set(result).symmetric_difference(_result))
+            print(body)
             return _result
-        print("listCollection", id, result)
+        # print("listCollection", id, result)
         return result
 
     def add(self, obj, verify_etag=True):
