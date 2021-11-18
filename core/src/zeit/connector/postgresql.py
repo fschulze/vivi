@@ -22,12 +22,14 @@ import zeit.connector.resource
 import zope.interface
 
 
+HTTPD_UNIXDIRECTORY = 'httpd/unix-directory'
 RESOURCE_TYPE_PROPERTY = zeit.connector.interfaces.RESOURCE_TYPE_PROPERTY
 RFC3339_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 
 # engine = create_engine("postgresql:///vivi", echo=True, echo_pool=True, future=True)
 # engine = create_engine("postgresql:///vivi", echo=True, future=True)
-engine = create_engine("postgresql://?service=vivi-devel", echo_pool=True, future=True)
+engine = create_engine("postgresql:///vivi", echo_pool=True, future=True)
+# engine = create_engine("postgresql://?service=vivi-devel", echo_pool=True, future=True)
 # engine = create_engine("postgresql:///vivi", future=True)
 
 DBSession = scoped_session(sessionmaker(bind=engine))
@@ -96,8 +98,32 @@ def _get_resource_type(properties):
     return r_type
 
 
+def _convert_properties_to_dict(properties):
+    # properties have tuples of the form (key, namespace) as keys,
+    # which doesn't work as json, so create a nested dict instead
+    metadata = {}
+    for (k, ns), v in properties.items():
+        if isinstance(v, datetime.datetime):
+            if k == 'cached-time':
+                # ignore property from zeo cache
+                continue
+            raise RuntimeError("datetime %r %r" % (k, v))
+        metadata.setdefault(ns, {})[k] = v
+    return metadata
+
+
+def _convert_properties_from_dict(metadata):
+    # properties have tuples of the form (key, namespace) as keys,
+    # which doesn't work as json, so we transform from a nested dict
+    properties = {}
+    for ns, d in metadata.items():
+        for k, v in d.items():
+            properties[(k, ns)] = v
+    return properties
+
+
 @zope.interface.implementer(zeit.connector.interfaces.ICachingConnector)
-class Connector(object):
+class CachingConnector(object):
     def __init__(self, roots={}, prefix=u'http://xml.zeit.de/'):
         print("postgresql.Connector.__init__", roots, prefix)
         roots.setdefault('postgresql', 'vivi')
@@ -135,17 +161,7 @@ class Connector(object):
             session.add(CanonicalPath(id=id, path=None))
             raise KeyError(
                 "The resource %r does not exist." % six.text_type(cid))
-        # properties have tuples of the form (key, namespace) as keys,
-        # which doesn't work as json, so create a nested dict instead
-        metadata = {}
-        for (k, ns), v in properties.items():
-            if isinstance(v, datetime.datetime):
-                if k == 'cached-time':
-                    # ignore property from zeo cache
-                    continue
-                raise RuntimeError("datetime %r %r" % (k, v))
-                v = v.strftime(RFC3339_FORMAT)
-            metadata.setdefault(ns, {})[k] = v
+        metadata = _convert_properties_to_dict(properties)
         body = wdc._get_resource_body(cid)
         session.add(StorageItem(
             path=path,
@@ -159,8 +175,6 @@ class Connector(object):
         return result
 
     def _db_get(self, session, id):
-        # properties have tuples of the form (key, namespace) as keys,
-        # which doesn't work as json, so we transform from a nested dict
         cpath = session.get(CanonicalPath, id)
         if cpath is None:
             cid = self._webdav_connector._get_cannonical_id(id)
@@ -172,11 +186,7 @@ class Connector(object):
             raise KeyError(
                 "The resource %r does not exist." % six.text_type(id))
         item = cpath.item
-        properties = {}
-        for ns, d in item.properties.items():
-            for k, v in d.items():
-                # TODO handle conversion of datetime objects
-                properties[(k, ns)] = v
+        properties = _convert_properties_from_dict(item.properties)
         resource_type = _get_resource_type(properties)
         content_type = properties.get(('getcontenttype', 'DAV:'))
         body = BytesIO(item.blob)
@@ -233,6 +243,123 @@ class Connector(object):
             id, locktoken=locktoken, invalidate=invalidate)
         print("unlock", id, locktoken, invalidate, result)
         return result
+
+    @classmethod
+    def factory(cls):
+        import zope.app.appsetup.product
+        print("postgresql.Connector.factory")
+        config = zope.app.appsetup.product.getProductConfiguration(
+            'zeit.connector')
+        return cls({
+            'default': config['document-store'],
+            'search': config['document-store-search']})
+
+
+class Root:
+    contentType = HTTPD_UNIXDIRECTORY
+    data = BytesIO(b'')
+    properties = {}
+
+    def __init__(self, prefix):
+        self.id = prefix
+
+
+@zope.interface.implementer(zeit.connector.interfaces.ICachingConnector)
+class Connector(object):
+    def __init__(self, roots={}, prefix=u'http://xml.zeit.de/'):
+        print("postgresql.Connector.__init__", roots, prefix)
+        roots.setdefault('postgresql', 'vivi')
+        self._roots = roots
+        self._prefix = prefix
+        metadata_object.create_all(engine)
+        try:
+            self[prefix]
+        except KeyError:
+            self.add(Root(prefix))
+
+    def _id2path(self, id):
+        if not id.startswith(self._prefix):
+            raise ValueError("Bad id %r (prefix is %r)" % (id, self._prefix))
+        return id[len(self._prefix):]
+
+    @lazy
+    def DAVConnector(self):
+        import zeit.connector.connector
+        return zeit.connector.connector.Connector
+
+    def listCollection(self, id):
+        try:
+            obj = self[id]
+        except KeyError:
+            return []
+        body = obj.data.read()
+        if not body:
+            return []
+        tree = parse_html(body)
+        result = sorted(
+            (x.text.rstrip('/'), id + x.text)
+            for x in tree.cssselect('td > a')
+            if x.text != 'Parent Directory' and not x.attrib['href'].startswith('/'))
+        print("listCollection", id, result)
+        return result
+
+    def __getitem__(self, id):
+        session = DBSession()
+        cpath = session.get(CanonicalPath, id)
+        if cpath is None:
+            raise KeyError(
+                "The resource %r does not exist." % six.text_type(id))
+        item = cpath.item
+        properties = _convert_properties_from_dict(item.properties)
+        # import pdb; pdb.set_trace()
+        resource_type = _get_resource_type(properties)
+        content_type = properties.get(('getcontenttype', 'DAV:'))
+        body = BytesIO(item.blob)
+        path = item.path
+        cid = self._prefix + path
+        result = zeit.connector.resource.CachedResource(
+            six.text_type(cid),
+            self.DAVConnector._id_splitlast(cid)[1].rstrip('/'),
+            resource_type,
+            lambda: properties,
+            lambda: body,
+            content_type=content_type)
+        if id != self._prefix:
+            import pdb; pdb.set_trace()
+        return result
+
+    def add(self, obj, verify_etag=True):
+        path = self._id2path(obj.id)
+        metadata = _convert_properties_to_dict(obj.properties)
+        metadata.setdefault('DAV:', {}).setdefault('getcontenttype', obj.contentType)
+        metadata.setdefault(RESOURCE_TYPE_PROPERTY[1], {}).setdefault(RESOURCE_TYPE_PROPERTY[0], obj.type)
+        if hasattr(obj.data, 'seek'):
+            obj.data.seek(0)
+        body = obj.data.read()
+        session = DBSession()
+        session.add(StorageItem(
+            path=path,
+            blob=body,
+            properties=metadata))
+        session.add(CanonicalPath(id=obj.id, path=path))
+        if obj.id.endswith('/'):
+            cid = obj.id.rstrip('/')
+        else:
+            cid = obj.id + '/'
+        if cid != obj.id:
+            session.add(CanonicalPath(id=cid, path=path))
+        if HTTPD_UNIXDIRECTORY:
+            (parent_id, child_id) = self.DAVConnector._id_splitlast(cid)
+            if parent_id.endswith('://'):
+                # the obj is the root
+                return
+            children = self.listCollection(parent_id)
+            parent_path = session.get(CanonicalPath, parent_id)
+            if parent_path is None:
+                import pdb; pdb.set_trace()
+            parent_path.item.blob = b'\n'.join(
+                ('<td><a href="%s">%s</a></td>' % (x, x)).encode('utf-8')
+                for x in sorted(set(children + [child_id])))
 
     @classmethod
     def factory(cls):
