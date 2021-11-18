@@ -27,7 +27,7 @@ RFC3339_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 
 # engine = create_engine("postgresql:///vivi", echo=True, echo_pool=True, future=True)
 # engine = create_engine("postgresql:///vivi", echo=True, future=True)
-engine = create_engine("postgresql:///vivi", echo_pool=True, future=True)
+engine = create_engine("postgresql://?service=vivi-devel", echo_pool=True, future=True)
 # engine = create_engine("postgresql:///vivi", future=True)
 
 DBSession = scoped_session(sessionmaker(bind=engine))
