@@ -28,6 +28,7 @@ log = logging.getLogger(__name__)
 
 @grok.subscribe(zope.lifecycleevent.IObjectMovedEvent)
 def index_after_add(event):
+    return
     # We don't use the "extended" (object, event) method, as we are not
     # interested in the events which are dispatched to sublocations.
     context = event.object

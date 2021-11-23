@@ -6,6 +6,7 @@ from sqlalchemy import Column
 from sqlalchemy import ForeignKey
 from sqlalchemy import LargeBinary
 from sqlalchemy import Unicode
+from sqlalchemy import TIMESTAMP
 from sqlalchemy import create_engine
 from sqlalchemy import event
 from sqlalchemy.dialects.postgresql import JSONB
@@ -16,6 +17,7 @@ from sqlalchemy.orm import scoped_session
 from sqlalchemy.orm import sessionmaker
 from zope.sqlalchemy import register
 import datetime
+import secrets
 import six
 import zeit.connector.interfaces
 import zeit.connector.resource
@@ -80,6 +82,18 @@ class CanonicalPath(BaseObject):
         ForeignKey(StorageItem.path, onupdate="CASCADE", ondelete="CASCADE"),
         nullable=True)
     item = relationship(StorageItem, lazy='joined')
+
+
+class Lock(BaseObject):
+    __tablename__ = "locks"
+
+    path = Column(
+        Unicode,
+        ForeignKey(StorageItem.path, onupdate="CASCADE", ondelete="CASCADE"),
+        primary_key=True)
+    principal = Column(Unicode, nullable=False)
+    until = Column(TIMESTAMP(timezone=True), nullable=False)
+    token = Column(Unicode, nullable=False)
 
 
 def _get_resource_type(properties):
@@ -257,6 +271,7 @@ class CachingConnector(object):
 
 class Root:
     contentType = HTTPD_UNIXDIRECTORY
+    type = 'collection'
     data = BytesIO(b'')
     properties = {}
 
@@ -288,6 +303,8 @@ class Connector(object):
         return zeit.connector.connector.Connector
 
     def listCollection(self, id):
+        # if id != self._prefix:
+        #     import pdb; pdb.set_trace()
         try:
             obj = self[id]
         except KeyError:
@@ -304,6 +321,8 @@ class Connector(object):
         return result
 
     def __getitem__(self, id):
+        # if id != self._prefix:
+        #     import pdb; pdb.set_trace()
         session = DBSession()
         cpath = session.get(CanonicalPath, id)
         if cpath is None:
@@ -324,14 +343,18 @@ class Connector(object):
             lambda: properties,
             lambda: body,
             content_type=content_type)
-        if id != self._prefix:
-            import pdb; pdb.set_trace()
+        # if id != self._prefix:
+        #     import pdb; pdb.set_trace()
         return result
 
     def add(self, obj, verify_etag=True):
+        print(f"add {obj.id} {obj.contentType} {obj.type}")
+        # if obj.id != self._prefix:
+        #     import pdb; pdb.set_trace()
         path = self._id2path(obj.id)
         metadata = _convert_properties_to_dict(obj.properties)
         metadata.setdefault('DAV:', {}).setdefault('getcontenttype', obj.contentType)
+        metadata.setdefault('DAV:', {}).setdefault('getlastmodified', datetime.datetime.now().strftime(RFC3339_FORMAT))
         metadata.setdefault(RESOURCE_TYPE_PROPERTY[1], {}).setdefault(RESOURCE_TYPE_PROPERTY[0], obj.type)
         if hasattr(obj.data, 'seek'):
             obj.data.seek(0)
@@ -348,18 +371,46 @@ class Connector(object):
             cid = obj.id + '/'
         if cid != obj.id:
             session.add(CanonicalPath(id=cid, path=path))
-        if HTTPD_UNIXDIRECTORY:
-            (parent_id, child_id) = self.DAVConnector._id_splitlast(cid)
-            if parent_id.endswith('://'):
-                # the obj is the root
-                return
-            children = self.listCollection(parent_id)
-            parent_path = session.get(CanonicalPath, parent_id)
-            if parent_path is None:
-                import pdb; pdb.set_trace()
-            parent_path.item.blob = b'\n'.join(
-                ('<td><a href="%s">%s</a></td>' % (x, x)).encode('utf-8')
-                for x in sorted(set(children + [child_id])))
+        (parent_id, child_id) = self.DAVConnector._id_splitlast(cid)
+        if parent_id.endswith('://'):
+            # the obj is the root
+            return
+        children = [x[0] for x in self.listCollection(parent_id)]
+        parent_path = session.get(CanonicalPath, parent_id)
+        if parent_path is None:
+            import pdb; pdb.set_trace()
+        print(f"adding child {child_id} to {parent_id}")
+        parent_path.item.blob = b'\n'.join(
+            ('<td><a href="%s">%s</a></td>' % (x, x.rstrip('/'))).encode('utf-8')
+            for x in sorted(set(children + [child_id])))
+
+    def move(self, old_id, new_id):
+        import pdb; pdb.set_trace()
+
+    def lock(self, id, principal, until):
+        # XXX does locking update getlastmodified DAV property?
+        session = DBSession()
+        token = secrets.token_hex()
+        session.add(Lock(
+            path=self._id2path(id),
+            principal=principal,
+            until=until,
+            token=token))
+
+    def locked(self, id):
+        session = DBSession()
+        lock = session.get(Lock, self._id2path(id))
+        if lock is None:
+            return (None, None, False)
+        import pdb; pdb.set_trace()
+
+    def unlock(self, id, locktoken=None, invalidate=True):
+        session = DBSession()
+        lock = session.get(Lock, self._id2path(id))
+        if lock is None:
+            import pdb; pdb.set_trace()
+        import pdb; pdb.set_trace()
+        return lock.token
 
     @classmethod
     def factory(cls):
