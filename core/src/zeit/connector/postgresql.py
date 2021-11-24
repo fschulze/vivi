@@ -11,12 +11,15 @@ from sqlalchemy import create_engine
 from sqlalchemy import event
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapper
+from sqlalchemy.orm import backref
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.orm import scoped_session
 from sqlalchemy.orm import sessionmaker
+from zeit.connector.interfaces import DeleteProperty
 from zope.sqlalchemy import register
 import datetime
+import os
 import secrets
 import six
 import zeit.connector.interfaces
@@ -72,6 +75,9 @@ class StorageItem(BaseObject):
     blob = Column(LargeBinary, nullable=False)
     properties = Column(JSONB, nullable=False)
 
+    def __repr__(self):
+        return f"<{self.__class__.__name__} path={self.path}>"
+
 
 class CanonicalPath(BaseObject):
     __tablename__ = "canonical_path"
@@ -81,7 +87,10 @@ class CanonicalPath(BaseObject):
         Unicode,
         ForeignKey(StorageItem.path, onupdate="CASCADE", ondelete="CASCADE"),
         nullable=True)
-    item = relationship(StorageItem, lazy='joined')
+    item = relationship(StorageItem, lazy='joined', backref=backref('cpaths', lazy='joined'))
+
+    def __repr__(self):
+        return f"<{self.__class__.__name__} id={self.id} path={self.path}>"
 
 
 class Lock(BaseObject):
@@ -134,6 +143,13 @@ def _convert_properties_from_dict(metadata):
         for k, v in d.items():
             properties[(k, ns)] = v
     return properties
+
+
+def _remove_deleted_metadata(metadata):
+    for ns, d in metadata.items():
+        for k, v in list(d.items()):
+            if v is DeleteProperty:
+                del d[k]
 
 
 @zope.interface.implementer(zeit.connector.interfaces.ICachingConnector)
@@ -314,7 +330,7 @@ class Connector(object):
             return []
         tree = parse_html(body)
         result = sorted(
-            (x.text.rstrip('/'), id + x.text)
+            (x.text.rstrip('/'), os.path.join(id, x.text))
             for x in tree.cssselect('td > a')
             if x.text != 'Parent Directory' and not x.attrib['href'].startswith('/'))
         print("listCollection", id, result)
@@ -330,7 +346,8 @@ class Connector(object):
                 "The resource %r does not exist." % six.text_type(id))
         item = cpath.item
         properties = _convert_properties_from_dict(item.properties)
-        # import pdb; pdb.set_trace()
+        # if id != self._prefix:
+        #     import pdb; pdb.set_trace()
         resource_type = _get_resource_type(properties)
         content_type = properties.get(('getcontenttype', 'DAV:'))
         body = BytesIO(item.blob)
@@ -360,6 +377,14 @@ class Connector(object):
             obj.data.seek(0)
         body = obj.data.read()
         session = DBSession()
+        cpath = session.get(CanonicalPath, obj.id)
+        if cpath is not None:
+            # update existing item
+            cpath.item.body = body
+            cpath.item.properties.update(metadata)
+            _remove_deleted_metadata(cpath.item.properties)
+            return
+        # we need to add a new item
         session.add(StorageItem(
             path=path,
             blob=body,
@@ -384,8 +409,26 @@ class Connector(object):
             ('<td><a href="%s">%s</a></td>' % (x, x.rstrip('/'))).encode('utf-8')
             for x in sorted(set(children + [child_id])))
 
+    def changeProperties(self, id, properties, locktoken=None):
+        properties.pop(zeit.connector.interfaces.UUID_PROPERTY, None)
+        metadata = _convert_properties_to_dict(properties)
+        session = DBSession()
+        cpath = session.get(CanonicalPath, id)
+        cpath.item.properties.update(metadata)
+        _remove_deleted_metadata(cpath.item.properties)
+
     def move(self, old_id, new_id):
-        import pdb; pdb.set_trace()
+        session = DBSession()
+        old_cpath = session.get(CanonicalPath, old_id)
+        new_path = self._id2path(new_id)
+        old_cpath.item.path = new_path
+        for cpath in old_cpath.item.cpaths:
+            if cpath.id == old_id + '/':
+                cpath.id = new_id + '/'
+                cpath.path = new_path
+            elif cpath.id == old_id.rstrip('/'):
+                cpath.id = new_id.rstrip('/')
+                cpath.path = new_path
 
     def lock(self, id, principal, until):
         # XXX does locking update getlastmodified DAV property?
@@ -401,15 +444,35 @@ class Connector(object):
         session = DBSession()
         lock = session.get(Lock, self._id2path(id))
         if lock is None:
-            return (None, None, False)
-        import pdb; pdb.set_trace()
+            result = (None, None, False)
+            print("locked", result)
+            return result
+        try:
+            import zope.authentication.interfaces  # UI-only dependency
+            authentication = zope.component.queryUtility(
+                zope.authentication.interfaces.IAuthentication)
+        except ImportError:
+            authentication = None
+        if authentication is not None:
+            try:
+                authentication.getPrincipal(lock.principal)
+            except zope.authentication.interfaces.PrincipalLookupError:
+                pass
+            else:
+                result = (lock.principal, lock.until, True)
+                print("locked", result)
+                return result
+        result = (lock.principal, lock.until, False)
+        print("locked", result)
+        return result
 
     def unlock(self, id, locktoken=None, invalidate=True):
         session = DBSession()
         lock = session.get(Lock, self._id2path(id))
         if lock is None:
             import pdb; pdb.set_trace()
-        import pdb; pdb.set_trace()
+        else:
+            session.delete(lock)
         return lock.token
 
     @classmethod
