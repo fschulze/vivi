@@ -324,9 +324,11 @@ class Connector(object):
         try:
             obj = self[id]
         except KeyError:
+            print("listCollection", id, "Not Found")
             return []
         body = obj.data.read()
         if not body:
+            print("listCollection", id, [])
             return []
         tree = parse_html(body)
         result = sorted(
@@ -379,12 +381,14 @@ class Connector(object):
         session = DBSession()
         cpath = session.get(CanonicalPath, obj.id)
         if cpath is not None:
+            print(f"updated existing {obj.id} {obj.contentType} {obj.type}")
             # update existing item
             cpath.item.body = body
             cpath.item.properties.update(metadata)
             _remove_deleted_metadata(cpath.item.properties)
             return
         # we need to add a new item
+        print(f"new {obj.id} {obj.contentType} {obj.type}")
         session.add(StorageItem(
             path=path,
             blob=body,
@@ -410,6 +414,7 @@ class Connector(object):
             for x in sorted(set(children + [child_id])))
 
     def changeProperties(self, id, properties, locktoken=None):
+        print(f"changeProperties {id}")
         properties.pop(zeit.connector.interfaces.UUID_PROPERTY, None)
         metadata = _convert_properties_to_dict(properties)
         session = DBSession()
@@ -418,6 +423,7 @@ class Connector(object):
         _remove_deleted_metadata(cpath.item.properties)
 
     def move(self, old_id, new_id):
+        print(f"move {old_id} {new_id}")
         session = DBSession()
         old_cpath = session.get(CanonicalPath, old_id)
         new_path = self._id2path(new_id)
@@ -429,6 +435,20 @@ class Connector(object):
             elif cpath.id == old_id.rstrip('/'):
                 cpath.id = new_id.rstrip('/')
                 cpath.path = new_path
+        (old_parent_id, old_child_id) = self.DAVConnector._id_splitlast(old_id)
+        old_children = [x[0] for x in self.listCollection(old_parent_id)]
+        old_parent_path = session.get(CanonicalPath, old_parent_id)
+        print(f"removing child {old_child_id} from {old_parent_id}")
+        old_parent_path.item.blob = b'\n'.join(
+            ('<td><a href="%s">%s</a></td>' % (x, x.rstrip('/'))).encode('utf-8')
+            for x in sorted(set(x for x in old_children if x != old_child_id)))
+        (new_parent_id, new_child_id) = self.DAVConnector._id_splitlast(new_id)
+        new_children = [x[0] for x in self.listCollection(new_parent_id)]
+        new_parent_path = session.get(CanonicalPath, new_parent_id)
+        print(f"adding child {new_child_id} to {new_parent_id}")
+        new_parent_path.item.blob = b'\n'.join(
+            ('<td><a href="%s">%s</a></td>' % (x, x.rstrip('/'))).encode('utf-8')
+            for x in sorted(set(new_children + [new_child_id])))
 
     def lock(self, id, principal, until):
         # XXX does locking update getlastmodified DAV property?
