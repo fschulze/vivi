@@ -155,7 +155,7 @@ def _remove_deleted_metadata(metadata):
 @zope.interface.implementer(zeit.connector.interfaces.ICachingConnector)
 class CachingConnector(object):
     def __init__(self, roots={}, prefix=u'http://xml.zeit.de/'):
-        print("postgresql.Connector.__init__", roots, prefix)
+        print("    postgresql.Connector.__init__", roots, prefix)
         roots.setdefault('postgresql', 'vivi')
         self._roots = roots
         self._prefix = prefix
@@ -173,7 +173,7 @@ class CachingConnector(object):
 
     @lazy
     def _webdav_connector(self):
-        print("postgresql.Connector._webdav_connector")
+        print("    postgresql.Connector._webdav_connector")
         connector = self.DAVConnector(self._roots, self._prefix)
         connector.from_postgresql = True
         return connector
@@ -201,7 +201,7 @@ class CachingConnector(object):
         if id != cid:
             session.add(CanonicalPath(id=id, path=path))
         result = wdc[id]
-        print("DAV", id, result)
+        print("    DAV", id, result)
         return result
 
     def _db_get(self, session, id):
@@ -229,7 +229,7 @@ class CachingConnector(object):
             lambda: properties,
             lambda: body,
             content_type=content_type)
-        # print("DB", path, result)
+        # print("    DB", path, result)
         return result
 
     def __getitem__(self, id):
@@ -248,20 +248,20 @@ class CachingConnector(object):
             if x.text != 'Parent Directory' and not x.attrib['href'].startswith('/'))
         _result = sorted(self._webdav_connector.listCollection(id))
         if result != _result:
-            print("listCollection (differences)", id, set(result).symmetric_difference(_result))
+            print("    listCollection (differences)", id, set(result).symmetric_difference(_result))
             print(body)
             return _result
-        # print("listCollection", id, result)
+        # print("    listCollection", id, result)
         return result
 
     def add(self, obj, verify_etag=True):
         result = self._webdav_connector.add(obj, verify_etag=verify_etag)
-        print("add", obj, verify_etag, result)
+        print("    add", obj, verify_etag, result)
         return result
 
     def lock(self, id, principal, until):
         result = self._webdav_connector.lock(id, principal, until)
-        print("lock", id, principal, until, result)
+        print("    lock", id, principal, until, result)
         return result
 
     def locked(self, id):
@@ -271,13 +271,13 @@ class CachingConnector(object):
     def unlock(self, id, locktoken=None, invalidate=True):
         result = self._webdav_connector.unlock(
             id, locktoken=locktoken, invalidate=invalidate)
-        print("unlock", id, locktoken, invalidate, result)
+        print("    unlock", id, locktoken, invalidate, result)
         return result
 
     @classmethod
     def factory(cls):
         import zope.app.appsetup.product
-        print("postgresql.Connector.factory")
+        print("    postgresql.Connector.factory")
         config = zope.app.appsetup.product.getProductConfiguration(
             'zeit.connector')
         return cls({
@@ -298,7 +298,7 @@ class Root:
 @zope.interface.implementer(zeit.connector.interfaces.ICachingConnector)
 class Connector(object):
     def __init__(self, roots={}, prefix=u'http://xml.zeit.de/'):
-        print("postgresql.Connector.__init__", roots, prefix)
+        print("    postgresql.Connector.__init__", roots, prefix)
         roots.setdefault('postgresql', 'vivi')
         self._roots = roots
         self._prefix = prefix
@@ -324,21 +324,39 @@ class Connector(object):
         try:
             obj = self[id]
         except KeyError:
-            print("listCollection", id, "Not Found")
+            print("    listCollection", id, "Not Found")
             return []
         body = obj.data.read()
         if not body:
-            print("listCollection", id, [])
+            print("    listCollection", id, [])
             return []
         tree = parse_html(body)
         result = sorted(
             (x.text.rstrip('/'), os.path.join(id, x.text))
             for x in tree.cssselect('td > a')
             if x.text != 'Parent Directory' and not x.attrib['href'].startswith('/'))
-        print("listCollection", id, result)
+        print("    listCollection", id, result)
         return result
 
+    def __contains__(self, id):
+        session = DBSession()
+        cpath = session.get(CanonicalPath, id)
+        result = cpath is not None
+        print("    contains", id, result)
+        return result
+
+    def __delitem__(self, id):
+        print("    delitem", id)
+        session = DBSession()
+        cpath = session.get(CanonicalPath, id)
+        if cpath is None:
+            raise KeyError(
+                "The resource %r does not exist." % six.text_type(id))
+        for obj in (*cpath.item.cpaths, cpath.item):
+            session.delete(obj)
+
     def __getitem__(self, id):
+        print("    getitem", id)
         # if id != self._prefix:
         #     import pdb; pdb.set_trace()
         session = DBSession()
@@ -367,7 +385,7 @@ class Connector(object):
         return result
 
     def add(self, obj, verify_etag=True):
-        print(f"add {obj.id} {obj.contentType} {obj.type}")
+        print(f"    add {obj.id} {obj.contentType} {obj.type}")
         # if obj.id != self._prefix:
         #     import pdb; pdb.set_trace()
         path = self._id2path(obj.id)
@@ -381,14 +399,14 @@ class Connector(object):
         session = DBSession()
         cpath = session.get(CanonicalPath, obj.id)
         if cpath is not None:
-            print(f"updated existing {obj.id} {obj.contentType} {obj.type}")
+            print(f"    updated existing {obj.id} {obj.contentType} {obj.type}")
             # update existing item
             cpath.item.body = body
             cpath.item.properties.update(metadata)
             _remove_deleted_metadata(cpath.item.properties)
             return
         # we need to add a new item
-        print(f"new {obj.id} {obj.contentType} {obj.type}")
+        print(f"    new {obj.id} {obj.contentType} {obj.type}")
         session.add(StorageItem(
             path=path,
             blob=body,
@@ -408,13 +426,13 @@ class Connector(object):
         parent_path = session.get(CanonicalPath, parent_id)
         if parent_path is None:
             import pdb; pdb.set_trace()
-        print(f"adding child {child_id} to {parent_id}")
+        print(f"    adding child {child_id} to {parent_id}")
         parent_path.item.blob = b'\n'.join(
             ('<td><a href="%s">%s</a></td>' % (x, x.rstrip('/'))).encode('utf-8')
             for x in sorted(set(children + [child_id])))
 
     def changeProperties(self, id, properties, locktoken=None):
-        print(f"changeProperties {id}")
+        print(f"    changeProperties {id}")
         properties.pop(zeit.connector.interfaces.UUID_PROPERTY, None)
         metadata = _convert_properties_to_dict(properties)
         session = DBSession()
@@ -422,8 +440,11 @@ class Connector(object):
         cpath.item.properties.update(metadata)
         _remove_deleted_metadata(cpath.item.properties)
 
+    def copy(self, old_id, new_id):
+        import pdb; pdb.set_trace()
+
     def move(self, old_id, new_id):
-        print(f"move {old_id} {new_id}")
+        print(f"    move {old_id} {new_id}")
         session = DBSession()
         old_cpath = session.get(CanonicalPath, old_id)
         new_path = self._id2path(new_id)
@@ -438,20 +459,21 @@ class Connector(object):
         (old_parent_id, old_child_id) = self.DAVConnector._id_splitlast(old_id)
         old_children = [x[0] for x in self.listCollection(old_parent_id)]
         old_parent_path = session.get(CanonicalPath, old_parent_id)
-        print(f"removing child {old_child_id} from {old_parent_id}")
+        print(f"    removing child {old_child_id} from {old_parent_id}")
         old_parent_path.item.blob = b'\n'.join(
             ('<td><a href="%s">%s</a></td>' % (x, x.rstrip('/'))).encode('utf-8')
             for x in sorted(set(x for x in old_children if x != old_child_id)))
         (new_parent_id, new_child_id) = self.DAVConnector._id_splitlast(new_id)
         new_children = [x[0] for x in self.listCollection(new_parent_id)]
         new_parent_path = session.get(CanonicalPath, new_parent_id)
-        print(f"adding child {new_child_id} to {new_parent_id}")
+        print(f"    adding child {new_child_id} to {new_parent_id}")
         new_parent_path.item.blob = b'\n'.join(
             ('<td><a href="%s">%s</a></td>' % (x, x.rstrip('/'))).encode('utf-8')
             for x in sorted(set(new_children + [new_child_id])))
 
     def lock(self, id, principal, until):
         # XXX does locking update getlastmodified DAV property?
+        print("    lock", id, principal, until)
         session = DBSession()
         token = secrets.token_hex()
         session.add(Lock(
@@ -459,13 +481,14 @@ class Connector(object):
             principal=principal,
             until=until,
             token=token))
+        return token
 
     def locked(self, id):
         session = DBSession()
         lock = session.get(Lock, self._id2path(id))
         if lock is None:
             result = (None, None, False)
-            print("locked", result)
+            print("    locked", id, result)
             return result
         try:
             import zope.authentication.interfaces  # UI-only dependency
@@ -480,13 +503,14 @@ class Connector(object):
                 pass
             else:
                 result = (lock.principal, lock.until, True)
-                print("locked", result)
+                print("    locked", id, result)
                 return result
         result = (lock.principal, lock.until, False)
-        print("locked", result)
+        print("    locked", id, result)
         return result
 
     def unlock(self, id, locktoken=None, invalidate=True):
+        print("    unlock", id, locktoken, invalidate)
         session = DBSession()
         lock = session.get(Lock, self._id2path(id))
         if lock is None:
@@ -498,7 +522,7 @@ class Connector(object):
     @classmethod
     def factory(cls):
         import zope.app.appsetup.product
-        print("postgresql.Connector.factory")
+        print("    postgresql.Connector.factory")
         config = zope.app.appsetup.product.getProductConfiguration(
             'zeit.connector')
         return cls({
@@ -512,7 +536,7 @@ class TransactionBoundCachingConnector(Connector):
 
 def connectorFactory():
     """Factory for creating the connector with data from zope.conf."""
-    print("postgresql.connectorFactory")
+    print("    postgresql.connectorFactory")
     import zope.app.appsetup.product
     config = zope.app.appsetup.product.getProductConfiguration(
         'zeit.connector')
