@@ -402,7 +402,7 @@ class Connector(object):
         if item is not None:
             print(f"    updated existing {obj.id} {obj.contentType} {obj.type}")
             # update existing item
-            item.body = body
+            item.blob = body
             item.properties.update(metadata)
             _remove_deleted_metadata(item.properties)
             return
