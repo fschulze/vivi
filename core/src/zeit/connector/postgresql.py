@@ -381,7 +381,13 @@ class Connector(object):
         #     import pdb; pdb.set_trace()
         return result
 
+    def __setitem__(self, id, obj):
+        obj = zeit.connector.interfaces.IResource(obj)
+        import pdb; pdb.set_trace()
+        pass
+
     def add(self, obj, verify_etag=True):
+        obj = zeit.connector.interfaces.IResource(obj)
         key = self._id2key(obj.id)
         metadata = _convert_properties_to_dict(obj.properties)
         metadata.setdefault('DAV:', {}).setdefault('getcontenttype', obj.contentType)
