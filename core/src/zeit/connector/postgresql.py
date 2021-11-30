@@ -426,7 +426,16 @@ class Connector(object):
         _remove_deleted_metadata(item.properties)
 
     def copy(self, old_id, new_id):
-        import pdb; pdb.set_trace()
+        print(f"    copy {old_id} {new_id}")
+        old_key = self._id2key(old_id)
+        new_key = self._id2key(new_id)
+        session = DBSession()
+        old_item = session.get(StorageItem, old_key)
+        session.add(StorageItem(
+            parent_path=new_key[0],
+            id=new_key[1],
+            blob=old_item.blob,
+            properties=old_item.properties))
 
     def move(self, old_id, new_id):
         print(f"    move {old_id} {new_id}")
