@@ -421,7 +421,8 @@ class Connector(object):
         metadata = _convert_properties_to_dict(properties)
         session = DBSession()
         item = session.get(StorageItem, self._id2key(id))
-        item.properties.update(metadata)
+        # XXX update() in-place does not mark the column as dirty, why?
+        item.properties = dict(item.properties, **metadata)
         _remove_deleted_metadata(item.properties)
 
     def copy(self, old_id, new_id):
