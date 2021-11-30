@@ -280,6 +280,7 @@ class CachingConnector(object):
             'search': config['document-store-search']})
 
 
+@zope.interface.implementer(zeit.connector.interfaces.IResource)
 class Root:
     contentType = HTTPD_UNIXDIRECTORY
     type = 'collection'
