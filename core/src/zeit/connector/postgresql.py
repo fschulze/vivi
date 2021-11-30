@@ -403,7 +403,8 @@ class Connector(object):
             print(f"    updated existing {obj.id} {obj.contentType} {obj.type}")
             # update existing item
             item.blob = body
-            item.properties.update(metadata)
+            # XXX update() in-place does not mark the column as dirty, why?
+            item.properties = dict(item.properties, **metadata)
             _remove_deleted_metadata(item.properties)
             return
         # we need to add a new item
