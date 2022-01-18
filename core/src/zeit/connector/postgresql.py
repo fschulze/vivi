@@ -1,3 +1,5 @@
+from gcp_storage_emulator.server import create_server
+from google.cloud import storage
 from io import BytesIO
 from lazy import lazy
 from lxml.html import fromstring as parse_html
@@ -26,9 +28,22 @@ import zeit.connector.resource
 import zope.interface
 
 
+GCP_EMULATOR_HOST = "localhost"
+GCP_EMULATOR_PORT = 9023
+GCP_EMULATOR_BUCKET = "zeit-test-bucket"
 HTTPD_UNIXDIRECTORY = 'httpd/unix-directory'
 RESOURCE_TYPE_PROPERTY = zeit.connector.interfaces.RESOURCE_TYPE_PROPERTY
 RFC3339_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
+
+# gcp_emulator_server = create_server(
+#     GCP_EMULATOR_HOST,
+#     GCP_EMULATOR_PORT,
+#     in_memory=False,
+#     default_bucket=GCP_EMULATOR_BUCKET)
+# gcp_emulator_server.start()
+os.environ["STORAGE_EMULATOR_HOST"] = f"http://{GCP_EMULATOR_HOST}:{GCP_EMULATOR_PORT}"
+client = storage.Client.create_anonymous_client()
+client.project = "zeit-test"
 
 # engine = create_engine("postgresql:///vivi", echo=True, echo_pool=True, future=True)
 # engine = create_engine("postgresql:///vivi", echo=True, future=True)
@@ -72,7 +87,7 @@ class StorageItem(BaseObject):
 
     parent_path = Column(Unicode, primary_key=True, index=True)
     id = Column(Unicode, primary_key=True)
-    blob = Column(LargeBinary, nullable=False)
+    # blob = Column(LargeBinary, nullable=False)
     properties = Column(JSONB, nullable=False)
 
     def __repr__(self):
@@ -292,9 +307,9 @@ class Root:
 
 
 @zope.interface.implementer(zeit.connector.interfaces.ICachingConnector)
-class Connector(object):
+class PostgresqlConnector(object):
     def __init__(self, roots={}, prefix=u'http://xml.zeit.de/'):
-        print("    postgresql.Connector.__init__", roots, prefix)
+        print("    postgresql.PostgresqlConnector.__init__", roots, prefix)
         roots.setdefault('postgresql', 'vivi')
         self._roots = roots
         self._prefix = prefix
@@ -443,6 +458,260 @@ class Connector(object):
         old_key = self._id2key(old_id)
         new_path = self._id2path(new_id)
         new_key = self._id2key(new_id)
+        session = DBSession()
+        old_item = session.get(StorageItem, old_key)
+        old_item.parent_path = new_key[0]
+        old_item.id = new_key[1]
+        session.execute(
+            sql.update(StorageItem)
+            .where(StorageItem.parent_path == old_path)
+            .values(parent_path=new_path))
+
+    def lock(self, id, principal, until):
+        # XXX does locking update getlastmodified DAV property?
+        print("    lock", id, principal, until)
+        if not until:
+            until = datetime.datetime.now(tz=datetime.timezone.utc)
+        session = DBSession()
+        token = secrets.token_hex()
+        key = self._id2key(id)
+        session.add(Lock(
+            parent_path=key[0],
+            id=key[1],
+            principal=principal,
+            until=until,
+            token=token))
+        return token
+
+    def locked(self, id):
+        session = DBSession()
+        lock = session.get(Lock, self._id2key(id))
+        if lock is None:
+            result = (None, None, False)
+            print("    locked", id, result)
+            return result
+        try:
+            import zope.authentication.interfaces  # UI-only dependency
+            authentication = zope.component.queryUtility(
+                zope.authentication.interfaces.IAuthentication)
+        except ImportError:
+            authentication = None
+        if authentication is not None:
+            try:
+                authentication.getPrincipal(lock.principal)
+            except zope.authentication.interfaces.PrincipalLookupError:
+                pass
+            else:
+                result = (lock.principal, lock.until, True)
+                print("    locked", id, result)
+                return result
+        result = (lock.principal, lock.until, False)
+        print("    locked", id, result)
+        return result
+
+    def unlock(self, id, locktoken=None, invalidate=True):
+        print("    unlock", id, locktoken, invalidate)
+        session = DBSession()
+        lock = session.get(Lock, self._id2key(id))
+        if lock is None:
+            import pdb; pdb.set_trace()
+        else:
+            session.delete(lock)
+        return lock.token
+
+    @classmethod
+    def factory(cls):
+        import zope.app.appsetup.product
+        print("    postgresql.PostgresqlConnector.factory")
+        config = zope.app.appsetup.product.getProductConfiguration(
+            'zeit.connector')
+        return cls({
+            'default': config['document-store'],
+            'search': config['document-store-search']})
+
+
+@zope.interface.implementer(zeit.connector.interfaces.ICachingConnector)
+class Connector(object):
+    def __init__(self, roots={}, prefix=u'http://xml.zeit.de/'):
+        print("    postgresql.Connector.__init__", roots, prefix)
+        roots.setdefault('postgresql', 'vivi')
+        self._roots = roots
+        self._prefix = prefix
+        self._bucket = client.bucket(GCP_EMULATOR_BUCKET)
+        metadata_object.create_all(engine)
+        try:
+            self[prefix]
+        except KeyError:
+            self.add(Root(prefix))
+
+    def _id2path(self, id):
+        if not id.startswith(self._prefix):
+            raise ValueError("Bad id %r (prefix is %r)" % (id, self._prefix))
+        return id[len(self._prefix):].rstrip('/')
+
+    def _id2key(self, id):
+        if not id.startswith(self._prefix):
+            raise ValueError("Bad id %r (prefix is %r)" % (id, self._prefix))
+        path = self._id2path(id)
+        if not path:
+            # root object
+            # print(f"    _id2key {id} root")
+            return ('', '')
+        result = path.rsplit('/', 1)
+        if len(result) == 1:
+            # root level objects
+            result = ['', *result]
+        # print(f"    _id2key {id} {result}")
+        return result
+
+    @lazy
+    def DAVConnector(self):
+        import zeit.connector.connector
+        return zeit.connector.connector.Connector
+
+    def listCollection(self, id):
+        path = self._id2path(id)
+        session = DBSession()
+        ids = session.execute(
+            sql.select(StorageItem.id)
+            .where(StorageItem.parent_path == path, StorageItem.id != ''))
+        result = [(x.id, os.path.join(id, x.id)) for x in ids]
+        print("    listCollection", id, result)
+        return result
+
+    def __contains__(self, id):
+        session = DBSession()
+        item = session.get(StorageItem, self._id2key(id))
+        result = item is not None
+        print("    contains", id, result)
+        return result
+
+    def __delitem__(self, id):
+        print("    delitem", id)
+        session = DBSession()
+        item = session.get(StorageItem, self._id2key(id))
+        if item is None:
+            raise KeyError(
+                "The resource %r does not exist." % six.text_type(id))
+        session.delete(item)
+
+    def __getitem__(self, id):
+        # print("    getitem", id)
+        # if id != self._prefix:
+        #     import pdb; pdb.set_trace()
+        session = DBSession()
+        item = session.get(StorageItem, self._id2key(id))
+        if item is None:
+            raise KeyError(
+                "The resource %r does not exist." % six.text_type(id))
+        properties = _convert_properties_from_dict(item.properties)
+        # if id != self._prefix:
+        #     import pdb; pdb.set_trace()
+        resource_type = _get_resource_type(properties)
+        content_type = properties.get(('getcontenttype', 'DAV:'))
+        # body = BytesIO(item.blob)
+        path = self._id2path(id)
+        if path and resource_type != 'collection':
+            def get_blob():
+                blob = self._bucket.blob(path)
+                data = BytesIO()
+                blob.download_to_file(data)
+                data.seek(0)
+                return data
+        else:
+            def get_blob():
+                import pdb; pdb.set_trace()
+                return BytesIO()
+        cid = os.path.join(self._prefix, item.parent_path, item.id)
+        result = zeit.connector.resource.CachedResource(
+            six.text_type(cid),
+            self.DAVConnector._id_splitlast(cid)[1].rstrip('/'),
+            resource_type,
+            lambda: properties,
+            get_blob,
+            content_type=content_type)
+        # if id != self._prefix:
+        #     import pdb; pdb.set_trace()
+        return result
+
+    def __setitem__(self, id, obj):
+        obj = zeit.connector.interfaces.IResource(obj)
+        import pdb; pdb.set_trace()
+        pass
+
+    def add(self, obj, verify_etag=True):
+        obj = zeit.connector.interfaces.IResource(obj)
+        key = self._id2key(obj.id)
+        metadata = _convert_properties_to_dict(obj.properties)
+        metadata.setdefault('DAV:', {}).setdefault('getcontenttype', obj.contentType)
+        metadata.setdefault('DAV:', {}).setdefault('getlastmodified', datetime.datetime.now(tz=datetime.timezone.utc).strftime(RFC3339_FORMAT))
+        metadata.setdefault(RESOURCE_TYPE_PROPERTY[1], {}).setdefault(RESOURCE_TYPE_PROPERTY[0], obj.type)
+        if hasattr(obj.data, 'seek'):
+            obj.data.seek(0)
+        path = self._id2path(obj.id)
+        if path and obj.type != 'collection':
+            blob = self._bucket.blob(path)
+            blob.upload_from_file(obj.data)
+        elif obj.id != self._prefix:
+            data = obj.data.read()
+            if data:
+                import pdb; pdb.set_trace()
+                pass
+        session = DBSession()
+        item = session.get(StorageItem, key)
+        if item is not None:
+            print(f"    updated existing {obj.id} {obj.contentType} {obj.type}")
+            # update existing item
+            # item.blob = body
+            # XXX update() in-place does not mark the column as dirty, why?
+            item.properties = dict(item.properties, **metadata)
+            _remove_deleted_metadata(item.properties)
+            return
+        # we need to add a new item
+        print(f"    new {obj.id} {obj.contentType} {obj.type}")
+        session.add(StorageItem(
+            parent_path=key[0],
+            id=key[1],
+            # blob=body,
+            properties=metadata))
+
+    def changeProperties(self, id, properties, locktoken=None):
+        print(f"    changeProperties {id}")
+        properties.pop(zeit.connector.interfaces.UUID_PROPERTY, None)
+        metadata = _convert_properties_to_dict(properties)
+        session = DBSession()
+        item = session.get(StorageItem, self._id2key(id))
+        # XXX update() in-place does not mark the column as dirty, why?
+        item.properties = dict(item.properties, **metadata)
+        _remove_deleted_metadata(item.properties)
+
+    def copy(self, old_id, new_id):
+        import pdb; pdb.set_trace()
+        print(f"    copy {old_id} {new_id}")
+        old_path = self._id2path(old_id)
+        old_key = self._id2key(old_id)
+        new_path = self._id2path(new_id)
+        new_key = self._id2key(new_id)
+        blob = self._bucket.blob(old_path)
+        if blob.exists():
+            self._bucket.copy_blob(blob, self._bucket, new_path)
+        session = DBSession()
+        old_item = session.get(StorageItem, old_key)
+        session.add(StorageItem(
+            parent_path=new_key[0],
+            id=new_key[1],
+            # blob=old_item.blob,
+            properties=old_item.properties))
+
+    def move(self, old_id, new_id):
+        print(f"    move {old_id} {new_id}")
+        old_path = self._id2path(old_id)
+        old_key = self._id2key(old_id)
+        new_path = self._id2path(new_id)
+        new_key = self._id2key(new_id)
+        blob = self._bucket.blob(old_path)
+        if blob.exists():
+            self._bucket.rename_blob(blob, new_path)
         session = DBSession()
         old_item = session.get(StorageItem, old_key)
         old_item.parent_path = new_key[0]
