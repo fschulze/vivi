@@ -155,11 +155,18 @@ def _convert_properties_from_dict(metadata):
     return properties
 
 
-def _remove_deleted_metadata(metadata):
+def _merge_metadata(metadata, updates):
+    new_metadata = {}
     for ns, d in metadata.items():
-        for k, v in list(d.items()):
-            if v is DeleteProperty:
-                del d[k]
+        new_metadata[ns] = {
+            k: v
+            for k, v in d.items()
+            if v is not DeleteProperty}
+        new_metadata[ns].update({
+            k: v
+            for k, v in updates.get(ns, {}).items()
+            if v is not DeleteProperty})
+    return new_metadata
 
 
 @zope.interface.implementer(zeit.connector.interfaces.ICachingConnector)
@@ -419,8 +426,7 @@ class PostgresqlConnector(object):
             # update existing item
             item.blob = body
             # XXX update() in-place does not mark the column as dirty, why?
-            item.properties = dict(item.properties, **metadata)
-            _remove_deleted_metadata(item.properties)
+            item.properties = _merge_metadata(item.properties, metadata)
             return
         # we need to add a new item
         print(f"    new {obj.id} {obj.contentType} {obj.type}")
@@ -437,8 +443,7 @@ class PostgresqlConnector(object):
         session = DBSession()
         item = session.get(StorageItem, self._id2key(id))
         # XXX update() in-place does not mark the column as dirty, why?
-        item.properties = dict(item.properties, **metadata)
-        _remove_deleted_metadata(item.properties)
+        item.properties = _merge_metadata(item.properties, metadata)
 
     def copy(self, old_id, new_id):
         print(f"    copy {old_id} {new_id}")
@@ -664,8 +669,7 @@ class Connector(object):
             # update existing item
             # item.blob = body
             # XXX update() in-place does not mark the column as dirty, why?
-            item.properties = dict(item.properties, **metadata)
-            _remove_deleted_metadata(item.properties)
+            item.properties = _merge_metadata(item.properties, metadata)
             return
         # we need to add a new item
         print(f"    new {obj.id} {obj.contentType} {obj.type}")
@@ -682,11 +686,9 @@ class Connector(object):
         session = DBSession()
         item = session.get(StorageItem, self._id2key(id))
         # XXX update() in-place does not mark the column as dirty, why?
-        item.properties = dict(item.properties, **metadata)
-        _remove_deleted_metadata(item.properties)
+        item.properties = _merge_metadata(item.properties, metadata)
 
     def copy(self, old_id, new_id):
-        import pdb; pdb.set_trace()
         print(f"    copy {old_id} {new_id}")
         old_path = self._id2path(old_id)
         old_key = self._id2key(old_id)
